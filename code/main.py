@@ -9,7 +9,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from datasets import Dataset, DatasetDict
-from gensim import corpora, models
 from joblib import dump, load
 from torch import nn
 from torch.optim.swa_utils import SWALR, AveragedModel, update_bn
@@ -21,14 +20,15 @@ from dataloader import (
     TopicDistributionDataset,
     check_cache,
     get_dataloader,
-    prepare_data_lda,
     prepare_features,
     prepare_inputs,
     process_data,
 )
 from load import load_data, load_tokenizer
-from loss import SupConLoss
-from model import LDA, BaselineModel, Contrastive, Ensemble, GRUNet
+from loss import  #TODO
+from model import #TODO
+
+from utils import check_directories, graph, set_seed, setup_gpus
 
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

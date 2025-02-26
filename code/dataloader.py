@@ -38,14 +38,8 @@ def prepare_inputs(batch, model, use_text=False):
         BERT encoder requires. It also separates the targets (ground truth labels) for supervised-loss.
     """
 
-    if model == 'lda':
-
-        btt = [b.to(device) for b in batch[3:5]]
-        inputs = {'topic_distribution': btt[1]}
-        targets = btt[0]
-
-        return inputs, targets
-    elif model == 'baseline' or model == 'contrastive':
+    
+    if model == 'baseline' or model == 'contrastive':
         btt = [b.to(device) for b in batch[:4]]
         inputs = {'input_ids': btt[0], 'token_type_ids': btt[1], 'attention_mask': btt[2]}
         targets = btt[3]
@@ -55,21 +49,7 @@ def prepare_inputs(batch, model, use_text=False):
             return inputs, targets, target_text
         else:
             return inputs, targets
-    elif model == 'GRU':
-        btt = [b.to(device) for b in [batch[0], batch[3]]]
-        input_ids = btt[0]
-        inputs = get_word_embeddings(input_ids)
-        targets = btt[1]
-        return inputs, targets
-
-    elif model == "ensemble":
-        inputs_gru, targets = prepare_inputs(batch, 'GRU')
-        # inputs_baseline, targets = prepare_inputs(batch, 'baseline')
-        inputs_lda, _ = prepare_inputs(batch, 'lda')
-        inputs_contrastive, _ = prepare_inputs(batch, 'contrastive')
-        return (inputs_gru, inputs_lda, inputs_contrastive), targets
-
-
+  
 def check_cache(args):
     folder = 'cache'
     cache_path = os.path.join(args.input_dir, folder, f'{args.dataset}.csv')
@@ -101,7 +81,6 @@ def prepare_features(args, data, tokenizer, cache_path):
     return all_features
 
 def process_data(args, features, tokenizer):
-  train_size, dev_size = len(features['train']), len(features['validation'])
 
   datasets = {}
   for split, feat in features.items():
@@ -148,42 +127,6 @@ class IntentDataset(Dataset):
         return input_ids, segment_ids, input_masks, label_ids, label_texts
         # return input_ids, label_ids, label_texts
 
-class TopicDistributionDataset(Dataset):
-    def __init__(self, data, encoder, dictionary, batch_size, split, tokenizer, ins_data):
-        self.data = data
-        self.encoder = encoder
-        self.dictionary = dictionary
-        self.batch_size = batch_size
-        self.topic_distributions = self.get_all_topic_distributions(split)
-        self.tokenizer = tokenizer
-        self.ins_data = ins_data
-
-    def get_all_topic_distributions(self, split):
-        all_distributions = []
-        for i in tqdm(range(0, len(self.data), self.batch_size), desc=f"Getting topic distributions for {split} data"):
-            batch = [item['text'] for item in self.data[i:i+self.batch_size]]
-            distributions = get_topic_distributions(self.encoder, self.dictionary, batch)
-            all_distributions.extend(distributions)
-        return all_distributions
-
-    def __len__(self):
-        return len(self.data)
-
-    def __getitem__(self, idx):
-        item = self.data[idx]
-        item['topic_distribution'] = self.topic_distributions[idx]
-        return item, self.ins_data[idx]
-
-    def collate_func(self, batch):
-        input_ids_lm = torch.tensor([f[1].embedding for f in batch], dtype=torch.long)
-        segment_ids = torch.tensor([f[1].segments for f in batch], dtype=torch.long)
-        input_masks = torch.tensor([f[1].input_mask for f in batch], dtype=torch.long)
-        input_ids = torch.tensor([f[0]['id'] for f in batch], dtype=torch.long)
-        label_ids = torch.tensor([f[0]['label'] for f in batch], dtype=torch.long)
-        topic_distributions = torch.stack([(f[0]['topic_distribution']).clone().detach().requires_grad_(True) for f in batch])
-        label_texts = [f[0]['label_text'] for f in batch]
-        return input_ids_lm, segment_ids, input_masks, label_ids, topic_distributions, label_texts
-        # return input_ids, label_ids, label_texts, topic_distributions
 
 def convert_data(dataset):
     return [{'id': item['id'], 'text': item['text'], 'label': item['label'], 'label_text': item['label_text']} for item in dataset]

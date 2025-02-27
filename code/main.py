@@ -18,6 +18,8 @@ from load import load_data, load_tokenizer
 from model import SiameseBERTToBiLSTM
 
 from utils import check_directories, graph, set_seed, setup_gpus
+from sklearn.decomposition import PCA
+from tqdm import tqdm
 
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -59,20 +61,39 @@ def baseline_train(args, model, datasets, tokenizer, num_authors):
             # Forward pass: model returns a probability between 0 and 1.
             score = model(input_pair, labels)
             loss = criterion(score, labels)
-            loss.backward()
 
             # Compute predictions based on a 0.5 threshold.
             preds = (score >= 0.5).float()
+            #print(f'preds shape: {preds.shape}')
+            #print(f'first 50 preds: {preds[:50]}')
+            #print(f"first 50 labels: {labels[:50]}")
             acc += (preds == labels).float().sum().item()
+            #print(f'acc: {acc}')
 
-            model.optimizer.step()  # Update the weights.
-            model.scheduler.step()  # Update the learning rate schedule.
-            model.zero_grad()
+            model.zero_grad()       # Reset gradients BEFORE new batch
+            loss.backward()
+            model.optimizer.step() 
+            
             losses += loss.item()
+            
+            if step > 0 and step % (len(train_dataloader) // 4) == 0:
+                val_acc = run_eval(args, model, datasets, tokenizer, num_authors, split='validation')
+                print(f"Step {step}, Validation accuracy: {val_acc:.4f}")
+                model.train()  # Return to training mode after validation
+            
+        model.scheduler.step()  # Update the learning rate schedule.
 
         train_accuracies.append(acc / len(datasets['train']))
         validation_accuracies.append(run_eval(args, model, datasets, tokenizer, num_authors, split='validation'))
         print('training epoch', epoch_count, '| losses:', losses, '| accuracy:', acc / len(datasets['train']))
+        
+        visualize_embeddings(args, model, datasets)
+        
+    
+        if not os.path.isdir('results'):
+            os.mkdir('results')
+        with open(os.path.join('results', 'accuracy.txt'), 'a') as f:
+            f.write(f"Epoch {epoch_count}: train_accuracy = {train_accuracies[-1]:.4f}, validation_accuracy = {validation_accuracies[-1]:.4f}\n")
 
         if not os.path.isdir('models'):
             os.mkdir('models')
@@ -87,8 +108,46 @@ def baseline_train(args, model, datasets, tokenizer, num_authors):
                 'loss': loss,
             }, './models/' + CHECKPOINT + '.t%s' % epoch_count)
 
+
     graph(args, train_accuracies, validation_accuracies)
 
+
+def visualize_embeddings(args, model, datasets):
+    import matplotlib.pyplot as plt
+
+    model.eval()
+    dataloader = get_dataloader(args, datasets['train'], 'train')
+    embeddings_list = []
+    labels_list = []
+
+    with torch.no_grad():
+        for _, batch in tqdm(enumerate(dataloader), total=len(dataloader)):
+            input_pair, labels = prepare_inputs(batch)
+            # Use only one side (e.g., left input) for the embedding visualization.
+            left_input, _ = input_pair  
+            # Compute embeddings from the left branch.
+            emb = model.branch(left_input)
+            embeddings_list.append(emb.cpu())
+            labels_list.append(labels.cpu())
+
+    all_embeddings = torch.cat(embeddings_list, dim=0).numpy()
+    all_labels = torch.cat(labels_list, dim=0).numpy().squeeze()
+
+    # Reduce dimensions to 2 for visualization.
+    pca = PCA(n_components=2)
+    embeddings_2d = pca.fit_transform(all_embeddings)
+
+    plt.figure(figsize=(8, 8))
+    scatter = plt.scatter(
+        embeddings_2d[:, 0], embeddings_2d[:, 1],
+        c=all_labels, cmap='viridis', alpha=0.5
+    )
+    plt.colorbar(scatter)
+    plt.title('Embeddings Visualization')
+    plt.xlabel('Principal Component 1')
+    plt.ylabel('Principal Component 2')
+    plt.show()
+    
 
 def run_eval(args, model, datasets, tokenizer, num_authors, split='validation'):
     model.eval()
@@ -148,10 +207,10 @@ if __name__ == "__main__":
   print('Data loaded and processed')
   
   print('Training model')
-  if args.task == 'dl':
+  if args.task == 'dl-contrastive':
     model = SiameseBERTToBiLSTM(args, tokenizer, target_size=num_authors).to(device)
     
-    #run_eval(args, model, datasets, tokenizer, num_authors, split='validation')
+    run_eval(args, model, datasets, tokenizer, num_authors, split='validation')
     #run_eval(args, model, datasets, tokenizer, num_authors, split='test')
     baseline_train(args, model, datasets, tokenizer, num_authors)
     run_eval(args, model, datasets, tokenizer, num_authors,num_authors, split='test')

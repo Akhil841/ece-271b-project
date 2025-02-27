@@ -2,3 +2,7 @@
 data/reddit_comment_body_dec_2024.json
 data/reddit_comments_dec_2024.json
 data/cache/reddit_comment_body_dec_2024.csv
+data/cache/labeled_messages.csv
+data/labeled_messages.json
+data/labeled_messages_mini.json
+reddit_comment_body_dec_2024.csv

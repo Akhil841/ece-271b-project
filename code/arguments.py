@@ -8,7 +8,7 @@ def params():
 
     # Experiment options
 
-    parser.add_argument("--task", default="dl", type=str,\
+    parser.add_argument("--task", default="dl-contrastive", type=str,\
                 help="Deep-Leanring Approach;\n\
                       Statisitcal Learning Approacht;", choices=['dl','statistical'])
 
@@ -25,7 +25,7 @@ def params():
     parser.add_argument("--model", default='bert', type=str,
                 help="The model architecture to be trained or fine-tuned.")
     parser.add_argument("--seed", default=42, type=int)
-    parser.add_argument("--dataset", default="reddit_comment_body_dec_2024", type=str,
+    parser.add_argument("--dataset", default="labeled_messages", type=str,
                 help="dataset", choices=['reddit_comment_body_dec_2024', 'reddit_comments_dec_2024'])
     parser.add_argument("--save-every", default=3, type=int,
                 help="How often to save the model checkpoints.")
@@ -42,13 +42,13 @@ def params():
                 help="Whether to run eval on the dev set.")
 
     # Hyper-parameters for tuning
-    parser.add_argument("--batch-size", default=512, type=int,
+    parser.add_argument("--batch-size", default=100, type=int,
                 help="Batch size per GPU/CPU for training and evaluation.")
-    parser.add_argument("--learning-rate", default=1e-2, type=float,
+    parser.add_argument("--learning-rate", default=1e-5, type=float,
                 help="Model learning rate starting point.")
     parser.add_argument("--hidden-dim", default=768, type=int,
                 help="Model hidden dimension.")
-    parser.add_argument("--drop-rate", default=0.9, type=float,
+    parser.add_argument("--drop-rate", default=0.1, type=float,
                 help="Dropout rate for model training")
     parser.add_argument("--embed-dim", default=768, type=int,
                 help="The embedding dimension of pretrained LM.")
@@ -58,7 +58,7 @@ def params():
                 help="Total number of training epochs to perform.")
     parser.add_argument("--max-len", default=20, type=int,
                 help="maximum sequence length to look back")
-    parser.add_argument("--weight-decay", default=1e-4, type=int,
+    parser.add_argument("--weight-decay", default=1e-4, type=float,
                 help="maximum sequence length to look back")
 
 

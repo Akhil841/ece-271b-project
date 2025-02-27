@@ -14,7 +14,7 @@ def load_data(args):
 
     messages = read_data(args)
     
-    num_authors = len(set(messages['label_text']))
+    num_authors = len(set(messages['label']))
 
     # Split the data into training and testing sets
     train_df, test_df = train_test_split(messages, test_size=0.2, random_state=args.seed)
@@ -44,20 +44,29 @@ def read_data(args):
     
     # Add an ID to each message
     messages['id'] = range(len(messages))
-    # Encode the author names into numerical labels
-    label_encoder = LabelEncoder()
-    messages['label'] = label_encoder.fit_transform(messages['author'])
-    # Rename the 'author' column to 'label_text'
-    messages = messages.rename(columns={'author': 'label_text'})
-    # Rename the 'body' column to 'text'
-    messages = messages.rename(columns={'body': 'text'})
+    
+    if args.task == 'dl-contrastive':
+        # Encode the author names into numerical labels
+
+        messages = messages.rename(columns={'message1': 'text1'})
+        messages = messages.rename(columns={'message2': 'text2'})
+
+        
+    else:
+        # Encode the author names into numerical labels
+        label_encoder = LabelEncoder()
+        messages['label'] = label_encoder.fit_transform(messages['author'])
+        # Rename the 'author' column to 'label_text'
+        messages = messages.rename(columns={'author': 'label_text'})
+        # Rename the 'body' column to 'text'
+        messages = messages.rename(columns={'body': 'text'})
     
     return messages
 
 
 def load_tokenizer(args):
     # task1: load bert tokenizer from pretrained "bert-base-uncased", you can also set truncation_side as "left"
-    tokenizer = BertTokenizer.from_pretrained('bert-base-uncased', truncation=True, truncation_side='left')
+    tokenizer = BertTokenizer.from_pretrained('bert-base-uncased', truncation=True, truncation_side='left', cleanup_tokenization_spaces=True)
     return tokenizer
 
 if __name__ == '__main__':

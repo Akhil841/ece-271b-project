@@ -8,7 +8,6 @@ from transformers import AdamW, BertConfig, BertModel, get_cosine_schedule_with_
 
 
 
-#TODO: Distance function for contrastive loss
 
 
 class BERTToBiLSTM(nn.Module):
@@ -22,7 +21,7 @@ class BERTToBiLSTM(nn.Module):
         # BiLSTM: input size is BERT's hidden size (768)
         # Use provided args for LSTM hidden dimension and layers, or fallback defaults.
         self.lstm_hidden_dim = getattr(args, "lstm_hidden_dim", 256)
-        self.num_layers = getattr(args, "lstm_layers", 1)
+        self.num_layers = getattr(args, "lstm_layers", 2)
         self.bi_lstm = nn.LSTM(
             input_size=768,
             hidden_size=self.lstm_hidden_dim,
@@ -33,8 +32,13 @@ class BERTToBiLSTM(nn.Module):
         
         # Dropout layer and dense fully connected layer.
         self.dropout = nn.Dropout(args.drop_rate)
-        # The fully connected layer expects concatenated hidden states from both directions.
-        self.fc = nn.Linear(self.lstm_hidden_dim * 2, target_size)
+        # The fully connected layer implemented as a multi-layer perceptron (MLP).
+        self.fc = nn.Sequential(
+            nn.Linear(self.lstm_hidden_dim * 2, getattr(args, "mlp_hidden_dim", 128)),
+            nn.ReLU(),
+            nn.Dropout(getattr(args, "mlp_drop_rate", 0.1)),
+            nn.Linear(getattr(args, "mlp_hidden_dim", 128), target_size)
+        )
 
     def forward(self, inputs, targets):
         # Pass the inputs through the Bert encoder.
@@ -57,11 +61,10 @@ class BERTToBiLSTM(nn.Module):
 
 
 
-#TODO: Overall model
 class SiameseBERTToBiLSTM(nn.Module):
     def __init__(self, args, tokenizer, target_size):
         super().__init__()
-        self.branch = BERTToBiLSTM(args, tokenizer, target_size)
+        self.branch = BERTToBiLSTM(args, tokenizer, 128)
         self.classifier = nn.Sequential(
             nn.Sigmoid()
         )
@@ -75,9 +78,11 @@ class SiameseBERTToBiLSTM(nn.Module):
         #print(f'left_output shape: {left_output.shape}')
         right_output = self.branch(right_input, targets)
         #print(f'right_output shape: {right_output.shape}')
+        left_norm = F.normalize(left_output, p=2, dim=1)
+        right_norm = F.normalize(right_output, p=2, dim=1)
 
         # Compute the cosine similarity between the outputs.
-        diff = F.cosine_similarity(left_output, right_output, dim=1, eps=1e-6).unsqueeze(1)
+        diff = F.cosine_similarity(left_norm, right_norm, dim=1, eps=1e-6).unsqueeze(1)
         
         #print(f'diff shape: {diff.shape}')
         # Activate for binary classification.

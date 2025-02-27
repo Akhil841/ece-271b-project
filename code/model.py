@@ -63,7 +63,6 @@ class SiameseBERTToBiLSTM(nn.Module):
         super().__init__()
         self.branch = BERTToBiLSTM(args, tokenizer, target_size)
         self.classifier = nn.Sequential(
-            nn.Linear(target_size, 1),
             nn.Sigmoid()
         )
 
@@ -73,13 +72,20 @@ class SiameseBERTToBiLSTM(nn.Module):
 
         # Process each input through the shared BERT-to-biLSTM branch.
         left_output = self.branch(left_input, targets)
+        #print(f'left_output shape: {left_output.shape}')
         right_output = self.branch(right_input, targets)
+        #print(f'right_output shape: {right_output.shape}')
 
-        # Compute the Euclidean distance between the outputs.
-        diff = torch.norm(left_output - right_output, p=2, dim=1, keepdim=True)
-
+        # Compute the cosine similarity between the outputs.
+        diff = F.cosine_similarity(left_output, right_output, dim=1, eps=1e-6).unsqueeze(1)
+        
+        #print(f'diff shape: {diff.shape}')
         # Activate for binary classification.
-        score = self.classifier(diff)
+        #score = self.classifier(diff)
+        
+        score = (diff + 1) / 2
+        
+            
         return score
 
 

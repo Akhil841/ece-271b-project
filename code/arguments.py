@@ -11,13 +11,10 @@ def params():
     parser.add_argument("--task", default="dl", type=str,\
                 help="Deep-Leanring Approach;\n\
                       Statisitcal Learning Approacht;", choices=['dl','statistical'])
-    
-    parser.add_argument("--temperature", default=0.7, type=int,
-                help="temperature parameter for contrastive loss")
 
 
     # optional fine-tuning techiques parameters
-    parser.add_argument("--reinit_n_layers", default=0, type=int,
+    parser.add_argument("--reinit_n_layers", default=3, type=int,
                 help="number of layers that are reinitialized. Count from last to first.")
 
     # Others
@@ -45,9 +42,9 @@ def params():
                 help="Whether to run eval on the dev set.")
 
     # Hyper-parameters for tuning
-    parser.add_argument("--batch-size", default=150, type=int,
+    parser.add_argument("--batch-size", default=512, type=int,
                 help="Batch size per GPU/CPU for training and evaluation.")
-    parser.add_argument("--learning-rate", default=1e-4, type=float,
+    parser.add_argument("--learning-rate", default=1e-2, type=float,
                 help="Model learning rate starting point.")
     parser.add_argument("--hidden-dim", default=768, type=int,
                 help="Model hidden dimension.")
@@ -59,17 +56,11 @@ def params():
                 help="Epsilon for Adam optimizer.")
     parser.add_argument("--n-epochs", default=50, type=int,
                 help="Total number of training epochs to perform.")
-    parser.add_argument("--supcon_epochs", default=10, type=int,
-                help="Total number of training epochs to perform.")
     parser.add_argument("--max-len", default=20, type=int,
                 help="maximum sequence length to look back")
     parser.add_argument("--weight-decay", default=1e-4, type=int,
                 help="maximum sequence length to look back")
 
-    # Hyper-parameters for ensemble learning
-    parser.add_argument("--lambda-gru", default=1, type=float)
-    parser.add_argument("--lambda-lda", default=1, type=float)
-    parser.add_argument("--lambda-contrastive", default=1, type=float)
 
     args = parser.parse_args()
     return args

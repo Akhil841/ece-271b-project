@@ -1,23 +1,13 @@
-import math
 import os
-import pickle
-import random
-import sys
-import time
 
-import matplotlib.pyplot as plt
-import numpy as np
 import torch
-from datasets import Dataset, DatasetDict
 from joblib import dump, load
 from torch import nn
-from torch.optim.swa_utils import SWALR, AveragedModel, update_bn
 from tqdm import tqdm as progress_bar
 
+from loss import ContrastiveLoss
 from arguments import params
 from dataloader import (
-    DataLoader,
-    TopicDistributionDataset,
     check_cache,
     get_dataloader,
     prepare_features,
@@ -25,14 +15,12 @@ from dataloader import (
     process_data,
 )
 from load import load_data, load_tokenizer
-from loss import  #TODO
-from model import #TODO
+from model import SiameseBERTToBiLSTM
 
 from utils import check_directories, graph, set_seed, setup_gpus
 
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
 def baseline_train(args, model, datasets, tokenizer, num_authors):
 
     CHECKPOINT = 'ckpt_mdl_{}_ep_{}_hsize_{}_dout_{}'.format(args.task, args.n_epochs, args.hidden_dim, args.drop_rate)
@@ -44,46 +32,62 @@ def baseline_train(args, model, datasets, tokenizer, num_authors):
     train_accuracies = []
     validation_accuracies = []
 
-    criterion = criterion = nn.CrossEntropyLoss()
+    # For Siamese networks with a Sigmoid classifier, use binary cross entropy loss.
+    criterion = ContrastiveLoss()
+
+    # Freeze all BERT layers except the top 2 layers for fine-tuning.
+    num_top_layers = args.reinit_n_layers
+    # Assuming the BERT encoder layers are in model.branch.encoder.encoder.layer
+    total_layers = len(model.branch.encoder.encoder.layer)
+    for i, layer in enumerate(model.branch.encoder.encoder.layer):
+        if i < total_layers - num_top_layers:
+            for param in layer.parameters():
+                param.requires_grad = False
+        else:
+            for param in layer.parameters():
+                param.requires_grad = True
 
     for epoch_count in range(args.n_epochs):
         losses = 0
         model.train()
-
         acc = 0
         for step, batch in progress_bar(enumerate(train_dataloader), total=len(train_dataloader)):
-            inputs, labels = prepare_inputs(batch, args.task)
-            logits = model(inputs, labels)
-            loss = criterion(logits, labels)
+            # Expect prepare_inputs to return a tuple of (left_input, right_input) and a binary label tensor.
+            input_pair, labels = prepare_inputs(batch)
+            # Ensure labels are float tensors with shape (batch, 1)
+            labels = labels.float().unsqueeze(1)
+            # Forward pass: model returns a probability between 0 and 1.
+            score = model(input_pair, labels)
+            loss = criterion(score, labels)
             loss.backward()
 
-            tem = (logits.argmax(1) == labels).float().sum()
-            acc += tem.item()
+            # Compute predictions based on a 0.5 threshold.
+            preds = (score >= 0.5).float()
+            acc += (preds == labels).float().sum().item()
 
-            model.optimizer.step()  # backprop to update the weights
-            model.scheduler.step()  # Update learning rate schedule
+            model.optimizer.step()  # Update the weights.
+            model.scheduler.step()  # Update the learning rate schedule.
             model.zero_grad()
             losses += loss.item()
 
-        train_accuracies.append(acc/len(datasets['train']))
+        train_accuracies.append(acc / len(datasets['train']))
         validation_accuracies.append(run_eval(args, model, datasets, tokenizer, num_authors, split='validation'))
-        print('training epoch', epoch_count, '| losses:', losses, '| accuracy:', acc/len(datasets['train']))
+        print('training epoch', epoch_count, '| losses:', losses, '| accuracy:', acc / len(datasets['train']))
 
         if not os.path.isdir('models'):
             os.mkdir('models')
 
         # Save checkpoint.
-        if (epoch_count % args.save_every == 0 and epoch_count != 0)  or epoch_count == args.n_epochs - 1:
+        if (epoch_count % args.save_every == 0 and epoch_count != 0) or epoch_count == args.n_epochs - 1:
             print('=======>Saving..')
             torch.save({
                 'epoch': epoch_count + 1,
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': model.optimizer.state_dict(),
                 'loss': loss,
-                }, './models/' + CHECKPOINT + '.t%s' % epoch_count)
+            }, './models/' + CHECKPOINT + '.t%s' % epoch_count)
 
     graph(args, train_accuracies, validation_accuracies)
-
 
 
 def run_eval(args, model, datasets, tokenizer, num_authors, split='validation'):
@@ -92,40 +96,35 @@ def run_eval(args, model, datasets, tokenizer, num_authors, split='validation'):
 
     acc = 0
     loss = 0
-    criterion = nn.CrossEntropyLoss()
-    confusion_matrix = np.zeros((num_authors, num_authors))
+    # For Siamese networks, use contrastive loss
+    criterion = ContrastiveLoss()
 
-    for step, batch in progress_bar(enumerate(dataloader), total=len(dataloader)):
-        inputs, labels = prepare_inputs(batch, args.task)
-        logits = model(inputs, labels)
-        loss += criterion(logits, labels).item()
+    with torch.no_grad():  # Disable gradient calculation for evaluation
+        for step, batch in progress_bar(enumerate(dataloader), total=len(dataloader)):
+            # Assumption: prepare_inputs returns a tuple of (left_input, right_input) and binary labels
+            input_pair, labels = prepare_inputs(batch)
+            # Ensure labels are float tensors with shape (batch, 1)
+            labels = labels.float().unsqueeze(1)
+        
+            # Assumption: model returns a similarity score between 0 and 1 after sigmoid activation
+            scores = model(input_pair, labels)
+            
+            #print(f'Max score: {scores.max().item()}, Min score: {scores.min().item()}')
+            
+            #print(f'shape of csv: {scores.shape}')  
+            loss += criterion(scores, labels).item()
+            
+            # Compute predictions based on a 0.5 threshold for binary classification
+            preds = (scores >= 0.5).float()
+            acc += (preds == labels).float().sum().item()
 
-        # Update the confusion matrix
-        predictions = logits.argmax(1)
+    # Calculate overall accuracy and average loss
+    total_samples = len(datasets[split])
+    avg_accuracy = acc / total_samples
+    avg_loss = loss / len(dataloader)
 
-        for i in range(len(labels)):
-
-            #print('labels[i].item()', labels[i].item())
-            confusion_matrix[labels[i].item(), predictions[i].item()] += 1
-
-        tem = (logits.argmax(1) == labels).float().sum()
-        acc += tem.item()
-
-
-    # Calculate the accuracy for each category and the most likely misclassification
-    category_acc = {i: confusion_matrix[i, i] / np.sum(confusion_matrix[i, :]) for i in range(num_authors)}
-    most_likely_misclassifications = {}
-    for i in range(num_authors):
-        confusion_matrix[i, i] = -1  # Temporarily set the diagonal element to -1
-        most_likely_misclassifications[i] = np.argmax(confusion_matrix[i, :])
-        confusion_matrix[i, i] = category_acc[i] * np.sum(confusion_matrix[i, :])  # Restore the diagonal element
-
-    print(f'\n{split} acc:', acc/len(datasets[split]), f'loss {loss}', f'|dataset split {split} size:', len(datasets[split]))
-    print(f'Category accuracies: {category_acc}')
-    print(f'Most likely misclassifications: {most_likely_misclassifications}\n')
-    return acc/len(datasets[split])
-
-
+    print(f'\n{split} acc: {avg_accuracy:.4f}, loss: {avg_loss:.4f}, dataset split {split} size: {total_samples}')
+    return avg_accuracy
 
 
 if __name__ == "__main__":
@@ -147,13 +146,13 @@ if __name__ == "__main__":
   datasets = process_data(args, features, tokenizer)
 
   print('Data loaded and processed')
-
+  
   print('Training model')
   if args.task == 'dl':
-    model = BaselineModel(args, tokenizer, target_size=num_authors).to(device)
+    model = SiameseBERTToBiLSTM(args, tokenizer, target_size=num_authors).to(device)
     
-    run_eval(args, model, datasets, tokenizer, num_authors, split='validation')
-    run_eval(args, model, datasets, tokenizer, num_authors, split='test')
+    #run_eval(args, model, datasets, tokenizer, num_authors, split='validation')
+    #run_eval(args, model, datasets, tokenizer, num_authors, split='test')
     baseline_train(args, model, datasets, tokenizer, num_authors)
     run_eval(args, model, datasets, tokenizer, num_authors,num_authors, split='test')
   else:

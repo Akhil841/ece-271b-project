@@ -8,13 +8,13 @@ import sys
 import numpy as np
 import torch
 from datasets import DatasetDict
-from gensim import corpora, models
 from torch.utils.data import DataLoader, Dataset, RandomSampler, SequentialSampler
 from tqdm import tqdm
 from tqdm import tqdm as progress_bar
 from transformers import BertModel
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+lm_model = BertModel.from_pretrained('bert-base-uncased').to(device)
 
 def get_dataloader(args, dataset, split='train'):
     sampler = RandomSampler(dataset) if split == 'train' else SequentialSampler(dataset)
@@ -25,31 +25,114 @@ def get_dataloader(args, dataset, split='train'):
     print(f"Loaded {split} data with {len(dataloader)} batches")
     return dataloader
 
-lm_model = BertModel.from_pretrained('bert-base-uncased').to(device)
-
 def get_word_embeddings(input_ids):
     embeddings = lm_model.get_input_embeddings()(input_ids)
     return embeddings
 
 
-def prepare_inputs(batch, model, use_text=False):
+def prepare_inputs(batch):
     """
         This function converts the batch of variables to input_ids, token_type_ids and attention_mask which the
         BERT encoder requires. It also separates the targets (ground truth labels) for supervised-loss.
     """
+    # 0: input_ids, 1: token_type_ids, 2: attention_mask, 3: target/label 4: text label
 
+    batch = make_pairs(batch)
+
+    left_input = {
+        'input_ids': batch[0].to(device),
+        'token_type_ids': batch[1].to(device),
+        'attention_mask': batch[2].to(device)
+    }
+    right_input = {
+        'input_ids': batch[3].to(device),
+        'token_type_ids': batch[4].to(device),
+        'attention_mask': batch[5].to(device)
+    }
+    labels = batch[6].to(device)
+    return (left_input, right_input), labels
+
+
+import torch
+import random
+
+import torch
+import random
+
+def make_pairs(batch):
+    '''
+    Takes in batch of data indexed as 0: input_ids, 1: token_type_ids, 2: attention_mask, 3: target/label, 4: text label
     
-    if model == 'baseline' or model == 'contrastive':
-        btt = [b.to(device) for b in batch[:4]]
-        inputs = {'input_ids': btt[0], 'token_type_ids': btt[1], 'attention_mask': btt[2]}
-        targets = btt[3]
+    Creates pairs of data for contrastive loss by creating pairs of data, with new labels of 1 if the data is from the same class, and -1 if the data is from different classes.
+    Balances the number of positive and negative pairs such that the total number of pairs equals the original batch size.
+    
+    Return batch of data indexed as:
+    0: input_ids of first, 1: token_type_ids of first, 2: attention_mask of first,
+    3: input_ids of second, 4: token_type_ids of second, 5: attention_mask of second,
+    6: label (1 if same class, -1 if different)
+    '''
+    pos_pairs = []
+    neg_pairs = []
+    batch_size = len(batch[0])
+    
+    # Create all possible pairs (i, j) with i < j
+    for i in range(batch_size):
+        for j in range(i+1, batch_size):
+            # Compare target labels (assumes each label is a tensor scalar or similar)
+            if batch[3][i].item() == batch[3][j].item():
+                pos_pairs.append((i, j))
+            else:
+                neg_pairs.append((i, j))
+    
+    # Determine required number of pairs from each category
+    required_pos = batch_size // 2
+    required_neg = batch_size - required_pos
 
-        if use_text:
-            target_text = batch[4]
-            return inputs, targets, target_text
-        else:
-            return inputs, targets
-  
+    # Sample positive pairs; use replacement if not enough
+    if len(pos_pairs) >= required_pos:
+        selected_pos = random.sample(pos_pairs, required_pos)
+    else:
+        selected_pos = random.choices(pos_pairs, k=required_pos)
+    
+    # Sample negative pairs; use replacement if not enough
+    if len(neg_pairs) >= required_neg:
+        selected_neg = random.sample(neg_pairs, required_neg)
+    else:
+        selected_neg = random.choices(neg_pairs, k=required_neg)
+    
+    all_pairs = selected_pos + selected_neg
+    
+    left_input_ids = []
+    left_token_type_ids = []
+    left_attention_mask = []
+    right_input_ids = []
+    right_token_type_ids = []
+    right_attention_mask = []
+    pair_labels = []
+    
+    for i, j in all_pairs:
+        left_input_ids.append(batch[0][i])
+        left_token_type_ids.append(batch[1][i])
+        left_attention_mask.append(batch[2][i])
+        
+        right_input_ids.append(batch[0][j])
+        right_token_type_ids.append(batch[1][j])
+        right_attention_mask.append(batch[2][j])
+        
+        # Label: 1 if same class, 0 if different
+        label = 1 if batch[3][i].item() == batch[3][j].item() else 0
+        pair_labels.append(label)
+    
+    return [
+        torch.stack(left_input_ids),
+        torch.stack(left_token_type_ids),
+        torch.stack(left_attention_mask),
+        torch.stack(right_input_ids),
+        torch.stack(right_token_type_ids),
+        torch.stack(right_attention_mask),
+        torch.tensor(pair_labels)
+    ]
+    
 def check_cache(args):
     folder = 'cache'
     cache_path = os.path.join(args.input_dir, folder, f'{args.dataset}.csv')
@@ -74,6 +157,7 @@ def prepare_features(args, data, tokenizer, cache_path):
             embed_data = tokenizer(example['text'], padding='max_length', truncation=True, max_length=args.max_len)
             instance = BaseInstance(embed_data, example)
             feats.append(instance)
+            
         all_features[split] = feats
 
 

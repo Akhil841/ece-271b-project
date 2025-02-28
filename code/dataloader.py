@@ -30,12 +30,11 @@ def get_word_embeddings(input_ids):
     return embeddings
 
 
-def prepare_inputs(batch):
+def prepare_inputs(batch, classes = False):
     """
         This function converts the batch of variables to input_ids, token_type_ids and attention_mask which the
         BERT encoder requires. It also separates the targets (ground truth labels) for supervised-loss.
     """
-    # 0: input_ids, 1: token_type_ids, 2: attention_mask, 3: target/label 4: text label
 
     left_input = {
         'input_ids': batch[0].to(device),
@@ -48,6 +47,10 @@ def prepare_inputs(batch):
         'attention_mask': batch[5].to(device)
     }
     labels = batch[6].to(device)
+    
+    if classes:
+        labels = (batch[7], batch[8])
+    
     return (left_input, right_input), labels
 
 
@@ -115,6 +118,9 @@ class BaseInstance(object):
         # for references
         self.text1 = example['text1']   # in natural language text
         self.text2 = example['text2']   # in natural language text
+        
+        self.author1 = example['author1']   # in natural language text
+        self.author2 = example['author2']   # in natural language text
 
 class IntentDataset(Dataset):
     def __init__(self, data, tokenizer, split='train'):
@@ -140,5 +146,5 @@ class IntentDataset(Dataset):
         
         label_ids = torch.tensor([f.intent_label for f in batch], dtype=torch.long)
 
-        return input_ids1, segment_ids1, input_masks1, input_ids2, segment_ids2, input_masks2, label_ids
+        return input_ids1, segment_ids1, input_masks1, input_ids2, segment_ids2, input_masks2, label_ids, [f.author1 for f in batch], [f.author2 for f in batch]
 

@@ -40,7 +40,7 @@ class BERTToBiLSTM(nn.Module):
             nn.Linear(getattr(args, "mlp_hidden_dim", 128), target_size)
         )
 
-    def forward(self, inputs, targets):
+    def forward(self, inputs):
         # Pass the inputs through the Bert encoder.
         bert_out = self.encoder(**inputs).last_hidden_state  # shape: (batch, seq_len, 768)
         
@@ -59,8 +59,6 @@ class BERTToBiLSTM(nn.Module):
         return logits
     
 
-
-
 class SiameseBERTToBiLSTM(nn.Module):
     def __init__(self, args, tokenizer, target_size):
         super().__init__()
@@ -74,9 +72,9 @@ class SiameseBERTToBiLSTM(nn.Module):
         left_input, right_input = input_pair
 
         # Process each input through the shared BERT-to-biLSTM branch.
-        left_output = self.branch(left_input, targets)
+        left_output = self.branch(left_input)
         #print(f'left_output shape: {left_output.shape}')
-        right_output = self.branch(right_input, targets)
+        right_output = self.branch(right_input)
         #print(f'right_output shape: {right_output.shape}')
         left_norm = F.normalize(left_output, p=2, dim=1)
         right_norm = F.normalize(right_output, p=2, dim=1)
@@ -94,3 +92,32 @@ class SiameseBERTToBiLSTM(nn.Module):
         return score
 
 
+    
+class SiameseBERT(nn.Module):
+    def __init__(self, args, tokenizer):
+        super().__init__()
+        self.tokenizer = tokenizer
+        self.encoder = BertModel.from_pretrained('bert-base-uncased')
+        self.encoder.resize_token_embeddings(len(self.tokenizer))
+        
+        mlp_hidden_dim = getattr(args, "mlp_hidden_dim", 128)
+        self.mlp = nn.Sequential(
+            nn.Linear(768, mlp_hidden_dim),
+            nn.ReLU(),
+            nn.Linear(mlp_hidden_dim, mlp_hidden_dim)
+        )
+
+    def forward(self, input_pair):
+        left_input, right_input = input_pair
+        left_repr = self.encoder(**left_input).pooler_output
+        right_repr = self.encoder(**right_input).pooler_output
+
+        left_mlp = self.mlp(left_repr)
+        right_mlp = self.mlp(right_repr)
+
+        left_norm = F.normalize(left_mlp, p=2, dim=1)
+        right_norm = F.normalize(right_mlp, p=2, dim=1)
+        cosine_sim = F.cosine_similarity(left_norm, right_norm, dim=1)
+        
+        score = torch.sigmoid(cosine_sim).unsqueeze(1)
+        return score

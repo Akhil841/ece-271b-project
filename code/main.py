@@ -20,6 +20,7 @@ from model import SiameseBERTToBiLSTM
 from utils import check_directories, graph, set_seed, setup_gpus
 from sklearn.decomposition import PCA
 from tqdm import tqdm
+import os
 
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -72,15 +73,12 @@ def baseline_train(args, model, datasets, tokenizer, num_authors):
 
             model.zero_grad()       # Reset gradients BEFORE new batch
             loss.backward()
-            model.optimizer.step() 
+            
             
             losses += loss.item()
             
-            if step > 0 and step % (len(train_dataloader) // 4) == 0:
-                val_acc = run_eval(args, model, datasets, tokenizer, num_authors, split='validation')
-                print(f"Step {step}, Validation accuracy: {val_acc:.4f}")
-                model.train()  # Return to training mode after validation
-            
+
+        model.optimizer.step() 
         model.scheduler.step()  # Update the learning rate schedule.
 
         train_accuracies.append(acc / len(datasets['train']))
@@ -116,38 +114,53 @@ def visualize_embeddings(args, model, datasets):
     import matplotlib.pyplot as plt
 
     model.eval()
-    dataloader = get_dataloader(args, datasets['train'], 'train')
+    dataloader = get_dataloader(args, datasets['validation'], 'validation')
     embeddings_list = []
     labels_list = []
 
     with torch.no_grad():
         for _, batch in tqdm(enumerate(dataloader), total=len(dataloader)):
-            input_pair, labels = prepare_inputs(batch)
+            # Prepare inputs with classes=True returns a tuple of two lists of string labels.
+            input_pair, labels = prepare_inputs(batch, classes=True)
             # Use only one side (e.g., left input) for the embedding visualization.
             left_input, _ = input_pair  
             # Compute embeddings from the left branch.
             emb = model.branch(left_input)
             embeddings_list.append(emb.cpu())
-            labels_list.append(labels.cpu())
-
+            # Collect left side labels (list of strings) directly.
+            # Instead of appending tensors, extend a Python list.
+            labels_list.extend(labels[0])
+    
     all_embeddings = torch.cat(embeddings_list, dim=0).numpy()
-    all_labels = torch.cat(labels_list, dim=0).numpy().squeeze()
-
+    
+    # Map each unique string label to an integer for coloring.
+    unique_labels = sorted(set(labels_list))
+    label_to_int = {label: idx for idx, label in enumerate(unique_labels)}
+    all_label_int = [label_to_int[label] for label in labels_list]
+    
     # Reduce dimensions to 2 for visualization.
     pca = PCA(n_components=2)
     embeddings_2d = pca.fit_transform(all_embeddings)
-
+    
+    import matplotlib.pyplot as plt
     plt.figure(figsize=(8, 8))
     scatter = plt.scatter(
         embeddings_2d[:, 0], embeddings_2d[:, 1],
-        c=all_labels, cmap='viridis', alpha=0.5
+        c=all_label_int, cmap='viridis', alpha=0.5
     )
-    plt.colorbar(scatter)
+    plt.colorbar(scatter, ticks=range(len(unique_labels)), label='Label index')
+    plt.clim(-0.5, len(unique_labels)-0.5)
     plt.title('Embeddings Visualization')
     plt.xlabel('Principal Component 1')
     plt.ylabel('Principal Component 2')
-    plt.show()
     
+    # Save plot to results folder.
+    if not os.path.isdir('results'):
+        os.mkdir('results')
+    print('Saving visualization to results folder')
+    save_path = os.path.join('results', 'embedding_visualization.png')
+    plt.savefig(save_path)
+    plt.close()
 
 def run_eval(args, model, datasets, tokenizer, num_authors, split='validation'):
     model.eval()
@@ -210,7 +223,7 @@ if __name__ == "__main__":
   if args.task == 'dl-contrastive':
     model = SiameseBERTToBiLSTM(args, tokenizer, target_size=num_authors).to(device)
     
-    run_eval(args, model, datasets, tokenizer, num_authors, split='validation')
+    #run_eval(args, model, datasets, tokenizer, num_authors, split='validation')
     #run_eval(args, model, datasets, tokenizer, num_authors, split='test')
     baseline_train(args, model, datasets, tokenizer, num_authors)
     run_eval(args, model, datasets, tokenizer, num_authors,num_authors, split='test')

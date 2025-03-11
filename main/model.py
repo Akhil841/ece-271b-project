@@ -21,8 +21,10 @@ class SiameseBERT(nn.Module):
         self.bert = BertModel.from_pretrained(pretrained_model_name, output_hidden_states=True)
         self.dropout = nn.Dropout(dropout_prob)
         
-        # Learnable weights for combining the last n_layers of BERT [CLS] representations
+        # Learnable weights for combining the last n_layers representations
         self.layer_weights = nn.Parameter(torch.ones(n_layers) / n_layers)
+        # Learnable vector for attention pooling across tokens to capture grammatical structure
+        self.attn_vector = nn.Parameter(torch.randn(hidden_size))
         
         # Fully connected block: main branch
         self.fc_layers = nn.Sequential(
@@ -37,7 +39,24 @@ class SiameseBERT(nn.Module):
         
         # Layer normalization after adding the residual connection
         self.layer_norm = nn.LayerNorm(hidden_size // 2)
+
+    def attention_pool(self, tokens, mask):
+        """
+        Applies attention pooling over token embeddings to capture grammatical structure.
         
+        Args:
+            tokens (torch.Tensor): Token embeddings of shape (batch_size, seq_len, hidden_size).
+            mask (torch.Tensor): Attention mask of shape (batch_size, seq_len).
+            
+        Returns:
+            torch.Tensor: Pooled embedding of shape (batch_size, hidden_size).
+        """
+        # Compute attention scores using a learnable vector
+        scores = torch.matmul(tokens, self.attn_vector)  # shape: (batch_size, seq_len)
+        scores = scores.masked_fill(mask == 0, float('-inf'))
+        attn_weights = F.softmax(scores, dim=1).unsqueeze(-1)  # shape: (batch_size, seq_len, 1)
+        pooled = torch.sum(tokens * attn_weights, dim=1)  # shape: (batch_size, hidden_size)
+        return pooled
 
     def forward(self, input_ids1, attention_mask1, input_ids2, attention_mask2):
         """
@@ -62,13 +81,17 @@ class SiameseBERT(nn.Module):
         outputs = self.bert(input_ids=input_ids, attention_mask=attention_mask)
         hidden_states = outputs.hidden_states  # Tuple of layers: (layer0, layer1, ..., layer_n)
         
-        # Extract the [CLS] token from the last n_layers and compute a weighted sum
-        cls_embeddings = [hidden_states[-i][:, 0, :] for i in range(1, self.n_layers + 1)]
-        weighted_cls = sum(w * emb for w, emb in zip(self.layer_weights, cls_embeddings))
-        weighted_cls = self.dropout(weighted_cls)
+        # Instead of just using the [CLS] token, apply attention pooling on each layer
+        pooled_embeddings = []
+        for i in range(1, self.n_layers + 1):
+            tokens = hidden_states[-i]  # shape: (batch, seq_len, hidden_size)
+            pooled = self.attention_pool(tokens, attention_mask)
+            pooled_embeddings.append(pooled)
+        weighted_pooled = sum(w * emb for w, emb in zip(self.layer_weights, pooled_embeddings))
+        weighted_pooled = self.dropout(weighted_pooled)
         
         # Fully connected transformation with residual connection and normalization
-        refined = self.fc_layers(weighted_cls) + self.fc_residual(weighted_cls)
+        refined = self.fc_layers(weighted_pooled) + self.fc_residual(weighted_pooled)
         refined = self.layer_norm(refined)
         
         # Split back into two halves for the two inputs

@@ -45,6 +45,7 @@ def group_messages_by_author(data):
     author_messages = defaultdict(list)
     for item in data:
         author_messages[item['author']].append(item['body'])
+        
     return author_messages
 
 def get_eligible_authors(author_messages, n_authors):
@@ -100,8 +101,8 @@ def print_training_examples_overview(training_examples, chosen_authors):
         print(ex)
 
 def tokenize_texts(tokenizer, texts1, texts2, max_length=512):
-    encoded_inputs1 = tokenizer(texts1, padding="max_length", truncation=True, max_length=max_length, return_tensors="pt")
-    encoded_inputs2 = tokenizer(texts2, padding="max_length", truncation=True, max_length=max_length, return_tensors="pt")
+    encoded_inputs1 = tokenizer(texts1, padding="max_length", truncation=True, max_length=max_length, return_tensors="pt", clean_up_tokenization_spaces=True)
+    encoded_inputs2 = tokenizer(texts2, padding="max_length", truncation=True, max_length=max_length, return_tensors="pt", clean_up_tokenization_spaces=True)
     return encoded_inputs1, encoded_inputs2
 
 

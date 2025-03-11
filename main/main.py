@@ -25,11 +25,11 @@ from transformers import BertModel
 from sklearn.model_selection import train_test_split
 
 from model import SiameseBERT, contrastive_loss
-from dataloader import load_data, create_training_data, prepare_training_data
+from dataloader import load, create_training_data, prepare_training_data
 from torch.utils.data import random_split
 
 
-def eval_model(model,device,testing_data):
+def eval_model(model,device, testing_data):
     
     # Visualize validation embeddings after the epoch
     model.eval()
@@ -153,38 +153,39 @@ def eval_model(model,device,testing_data):
 
 if __name__ == "__main__":
     
+    print("Loading data...")
     # Load the data
-    data = load_data("data/reddit_comments_dec_2024.json")
-    training_data = create_training_data(data, n_pairs=2000, n_authors=10)
+    data = load('data/reddit_comment_body_dec_2024.json')
+    #print(type(data))
+    print("Creating training data...")
+    training_data = create_training_data(data, n_pairs=2000, n_authors=5)
     testing_data = create_training_data(data, n_pairs=100, n_authors=5)
     
+    print("Preparing training data...")
     # Prepare the training data
-    training_data = prepare_training_data(training_data)
-    
-    testing_data = prepare_training_data(testing_data)
+    tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
+    training_data = prepare_training_data(training_data, tokenizer=tokenizer)
+    testing_data = prepare_training_data(testing_data, tokenizer=tokenizer)
 
-
-        
     debug = False
+    
+    # Split indices for training embeddings and SVM evaluation
+    indices = list(range(len(training_data["labels"])))
+    emb_indices, svm_indices = train_test_split(indices, test_size=0.2, random_state=42)
+
+    # Create dictionaries for each split by indexing every field in training_data using list comprehensions
+    training_embedding_data = {k: [training_data[k][i] for i in emb_indices] for k in training_data}
+    training_svm_data = {k: [training_data[k][i] for i in svm_indices] for k in training_data}
+
+    train_test_dataset = training_svm_data
 
     # Prepare dataset using tensors 
     training_dataset = TensorDataset(
-        training_data["input_ids1"],
-        training_data["attention_mask1"],
-        training_data["input_ids2"],
-        training_data["attention_mask2"],
-        training_data["labels"]
-    )
-
-
-    total_length = len(training_dataset)
-    embedding_length = int(0.7 * total_length)
-    svm_length = int(0.15 * total_length)
-    test_length = total_length - embedding_length - svm_length
-
-    train_embedding_dataset, train_svm_dataset, train_test_dataset = random_split(
-        training_dataset,
-        [embedding_length, svm_length, test_length]
+        torch.tensor(training_embedding_data["input_ids1"]),
+        torch.tensor(training_embedding_data["attention_mask1"]),
+        torch.tensor(training_embedding_data["input_ids2"]),
+        torch.tensor(training_embedding_data["attention_mask2"]),
+        torch.tensor(training_embedding_data["labels"])
     )
 
     # Define device
@@ -200,9 +201,13 @@ if __name__ == "__main__":
     n_epochs = 3
     batch_size = 8
 
-    # Optionally, freeze parts of BERT (if desired)
-    for param in model.bert.encoder.parameters():
+    # Freeze all BERT parameters first
+    for param in model.bert.parameters():
         param.requires_grad = False
+    # Unfreeze the top 2 BERT layers for retraining
+    for layer in model.bert.encoder.layer[-3:]:
+        for param in layer.parameters():
+            param.requires_grad = True
 
     # Calculate total training steps for scheduler
     total_steps = (len(training_dataset) // batch_size) * n_epochs
@@ -213,6 +218,10 @@ if __name__ == "__main__":
     train_subset = training_dataset
     train_loader = DataLoader(train_subset, batch_size=batch_size, shuffle=True)
 
+    # List to store average loss for each epoch
+    all_epoch_losses = []
+
+    print("Training the model...")
     # Train the model
     for epoch in range(1, n_epochs + 1):
         model.train()
@@ -232,16 +241,11 @@ if __name__ == "__main__":
             mask2 = mask2.to(device)
             labels = labels.to(device).float()
             
-            if debug:
-                print(f"batch size: {len(labels)}")
-            
             optimizer.zero_grad()
             emb1, emb2 = model(input_ids1, mask1, input_ids2, mask2)
 
             # Compute contrastive loss
             loss = contrastive_loss(emb1, emb2, labels, margin=1.0)
-            if debug:
-                print(f"loss: {loss.item()}")
             
             loss.backward()
             optimizer.step()
@@ -253,21 +257,19 @@ if __name__ == "__main__":
             
             if i == 1 or (i % max(1, int(0.2 * len(train_loader))) == 0):
                 model.eval()
-                
-                unique_authors = set(testing_data['author1'] + testing_data['author2'])
-                
                 eval_model(model, device, testing_data)
-                eval_model(model, device, training_data)
+                eval_model(model, device, train_test_dataset)
                 model.train()
         
         avg_loss = train_loss / total
+        all_epoch_losses.append(avg_loss)
         print(f"Epoch {epoch} - Loss: {avg_loss:.4f} ")
         
         print(f"Epoch {epoch} Testing Results")
         eval_model(model, device, testing_data)
         
         print(f"Epoch {epoch} Training Results")
-        eval_model(model, device, training_data)
+        eval_model(model, device, train_test_dataset)
         
         # Smooth out the loss graph using a moving average filter
         smoothing_window = 5  # Adjust the window size as needed
@@ -275,8 +277,17 @@ if __name__ == "__main__":
         
         plt.figure(figsize=(8, 4))
         plt.plot(range(smoothing_window, len(batch_losses) + 1), smooth_losses, marker='o')
-        plt.title(f'Epoch {epoch}: Smoothed Batch vs Loss')
+        plt.title(f'Epoch {epoch}: Smoothed Batch Loss')
         plt.xlabel('Batch Number')
         plt.ylabel('Loss')
         plt.grid(True)
         plt.show()
+
+    # Plot the average loss per epoch after all epochs finish
+    plt.figure(figsize=(8, 4))
+    plt.plot(range(1, n_epochs+1), all_epoch_losses, marker='o')
+    plt.title('Average Loss per Epoch')
+    plt.xlabel('Epoch')
+    plt.ylabel('Average Loss')
+    plt.grid(True)
+    plt.show()

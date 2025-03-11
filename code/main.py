@@ -7,7 +7,7 @@ from tqdm import tqdm as progress_bar
 
 from loss import ContrastiveLoss
 from arguments import params
-from dataloader import (
+from main.dataloader import (
     check_cache,
     get_dataloader,
     prepare_features,
@@ -15,7 +15,7 @@ from dataloader import (
     process_data,
 )
 from load import load_data, load_tokenizer
-from model import SiameseBERTToBiLSTM
+from main.model import SiameseBERTToBiLSTM
 
 from utils import check_directories, graph, set_seed, setup_gpus
 from sklearn.decomposition import PCA
